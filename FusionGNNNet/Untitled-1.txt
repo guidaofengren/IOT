@@ -1,0 +1,4 @@
+# NexusNet: Lightweight Graph Modeling for Motor Imagery-based Brain-computer Interfaces
+
+This is a PyTorch implementation of NexusNet for MI decoding.
+All code for our NexusNet has been released. If you are interested in our work, please consider citing it.
