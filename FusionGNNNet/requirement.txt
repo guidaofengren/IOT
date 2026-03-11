@@ -1,6 +1,0 @@
-torch>=1.13
-numpy
-scipy
-mne
-moabb
-scikit-learn

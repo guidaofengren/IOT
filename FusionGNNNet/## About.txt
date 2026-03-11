@@ -1,3 +1,0 @@
-## About
-
-Official PyTorch Implementation of NexusNet for MI decoding.
