@@ -22,3 +22,11 @@ Included modules:
 Notes:
 - Historical exploratory scripts and JSON result files are intentionally excluded.
 - Current defaults target the paper-track setup with the three selected backbones.
+
+Current released default:
+- Main method: `run_stable_standalone_pipeline.py`
+- Global budget: `topk=12`
+- Selector defaults: `epochs=120`, `batch_size=32`, `lr=1e-3`, `hidden=64`, `dropout=0.1`
+- NexusNet subset defaults: `epochs=220`, `patience=35`, `batch_size=64`, `lr=0.0018`, `dropout=0.22`
+- Stability defaults: `min_epochs=90`, `val_smooth_window=8`, `grad_clip=1.0`, `ema_decay=0.99`
+- Final pipeline defaults keep `channel_weight_mode=none`, `selector_post_rule=none`, `distill_alpha=0.0`

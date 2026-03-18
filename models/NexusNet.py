@@ -86,6 +86,7 @@ class Nexus(nn.Module):
                  adj,
                  gadj,
                  dataset,
+                 channel_indices=None,
                  k=1,):
         super(Nexus, self).__init__()
         self.__dict__.update(locals())
@@ -101,32 +102,38 @@ class Nexus(nn.Module):
         self.spatial_pos = torch.from_numpy((self.shortest_dist)).long()
         self.spatial_pos_encoder = nn.Embedding(self.max_dist, 1, padding_idx=0)
 
-        region = np.zeros(self.n_nodes)        
-        index = 0
-        if dataset == 'BNCI2014001':            
-            region[0] = 0
-            region[1:6] = 1
-            region[6:13] = 2
-            region[13:18] = 3
-            region[18:21] = 4
-            region[21] = 5
-            edge_attr = np.zeros((21, 3))
-            for i in range(6):
-                for j in range(i, 6):
-                    edge_attr[index] = np.array([i!=j, i, j])
-                    index += 1
-        elif dataset == 'BNCI2014004':
-            region[0] = 0
-            edge_attr = np.zeros((1, 3))
-            for i in range(1):
-                for j in range(i, 1):
-                    edge_attr[index] = np.array([i!=j, i, j])
-                    index += 1
+        region, edge_attr = self._build_region_metadata(dataset, channel_indices)
 
         route = algos.gen_edge_input(self.max_dist, self.path, edge_attr, region)
         self.route = torch.from_numpy(route).long()
         self.edge_dis_encoder = nn.Embedding(self.n_nodes**2, 1)
         self.edge_encoder = nn.Embedding(100, 1, padding_idx=0)
+
+    def _build_region_metadata(self, dataset, channel_indices):
+        if dataset == 'BNCI2014001':
+            full_region = np.array([0, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 4, 4, 4, 5], dtype=np.int64)
+        elif dataset == 'BNCI2014004':
+            full_region = np.array([0, 0, 0], dtype=np.int64)
+        else:
+            full_region = np.arange(self.n_nodes, dtype=np.int64)
+
+        if channel_indices is None:
+            region = full_region[: self.n_nodes].copy()
+        else:
+            region = full_region[np.asarray(channel_indices, dtype=np.int64)].copy()
+
+        unique_regions = sorted(np.unique(region).tolist())
+        region_remap = {region_id: idx for idx, region_id in enumerate(unique_regions)}
+        region = np.array([region_remap[int(region_id)] for region_id in region], dtype=np.int64)
+
+        num_regions = len(unique_regions)
+        edge_attr = np.zeros((num_regions * (num_regions + 1) // 2, 3), dtype=np.int64)
+        index = 0
+        for i in range(num_regions):
+            for j in range(i, num_regions):
+                edge_attr[index] = np.array([i != j, i, j], dtype=np.int64)
+                index += 1
+        return region, edge_attr
 
 
     def forward(self, x):
@@ -184,6 +191,9 @@ class NexusNet(BaseModel):
                  third_kernel_size=(8, 4),
                  drop_prob=0.25,
                  dataset=None,
+                 channel_indices=None,
+                 channel_gate_init=None,
+                 channel_gate_target="feature",
                  ):
         super(NexusNet, self).__init__()
         
@@ -208,9 +218,25 @@ class NexusNet(BaseModel):
         )
 
         self.centrality_encoder = nn.Embedding(torch.max(self.centrality)+1, 1)
+        if channel_gate_init is not None:
+            gate_init = torch.as_tensor(channel_gate_init, dtype=torch.float32)
+            if gate_init.numel() != self.in_chans:
+                raise ValueError("channel_gate_init must align with in_chans")
+            gate_init = gate_init / gate_init.mean().clamp_min(1e-6)
+            self.channel_gate_logits = nn.Parameter(torch.log(gate_init.clamp_min(1e-4)))
+        else:
+            self.channel_gate_logits = None
         self.nexus = nn.Sequential(
             Expression(_review),
-            Nexus(self.flag[0:3], self.in_chans, self.input_time_length, adj=self.Adj, gadj=self.eu_adj, dataset=self.dataset),
+            Nexus(
+                self.flag[0:3],
+                self.in_chans,
+                self.input_time_length,
+                adj=self.Adj,
+                gadj=self.eu_adj,
+                dataset=self.dataset,
+                channel_indices=self.channel_indices,
+            ),
         )
 
         self.spatial_conv = nn.Sequential(
@@ -256,11 +282,20 @@ class NexusNet(BaseModel):
 
         self.apply(glorot_weight_zero_bias)
 
+    def _channel_gate(self, device: torch.device):
+        if self.channel_gate_logits is None:
+            return None
+        gate = torch.softmax(self.channel_gate_logits, dim=0) * float(self.in_chans)
+        return gate.to(device=device)
+
     def forward_init(self, x):
         with torch.no_grad():
             centrality_bias = self.centrality_encoder(self.centrality.to(x.device))
             batch_size = x.size(0)
             x = self.temporal_conv(x)
+            if self.channel_gate_target == "graph" and self.channel_gate_logits is not None:
+                gate = self._channel_gate(x.device)
+                x = x * gate.view(1, 1, self.in_chans, 1)
             x = self.nexus(x)
             x = x.view(1, batch_size, -1, x.size(-2), x.size(-1))
             x = x.permute(1, 2, 0, 3, 4).contiguous().view(batch_size, -1, x.size(-2), x.size(-1))
@@ -269,6 +304,9 @@ class NexusNet(BaseModel):
                 centrality_bias = self.centrality_encoder(self.centrality.to(x.device)).view(1, 1, self.centrality.shape[0], 1)
                 centrality_bias = torch.softmax(centrality_bias, dim=2)
                 x= x*centrality_bias
+            if self.channel_gate_target == "feature" and self.channel_gate_logits is not None:
+                gate = self._channel_gate(x.device)
+                x = x * gate.view(1, 1, self.in_chans, 1)
             x = self.spatial_conv(x)
             x = self.separable_conv(x)
         return x
@@ -281,6 +319,9 @@ class NexusNet(BaseModel):
         batch_size = x.size(0)
         x = x[:, :, :, None]
         x = self.temporal_conv(x)
+        if self.channel_gate_target == "graph" and self.channel_gate_logits is not None:
+            gate = self._channel_gate(x.device)
+            x = x * gate.view(1, 1, self.in_chans, 1)
         x = self.nexus(x)        
         x = x.view(1, batch_size, -1, x.size(-2), x.size(-1))
         x = x.permute(1, 0, 2, 3, 4).contiguous().view(batch_size, -1, x.size(-2), x.size(-1))
@@ -289,8 +330,10 @@ class NexusNet(BaseModel):
             centrality_bias = self.centrality_encoder(self.centrality.to(x.device)).view(1, 1, self.centrality.shape[0], 1)
             centrality_bias = torch.softmax(centrality_bias, dim=2)
             x = x*centrality_bias
+        if self.channel_gate_target == "feature" and self.channel_gate_logits is not None:
+            gate = self._channel_gate(x.device)
+            x = x * gate.view(1, 1, self.in_chans, 1)
         x = self.spatial_conv(x)
         x = self.separable_conv(x)
         x = self.cls(x)
         return x, feature
-
