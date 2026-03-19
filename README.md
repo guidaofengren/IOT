@@ -1,27 +1,30 @@
 # Paper Top-k Budget Study
 
-This folder contains the minimal code needed for the paper-track experiments only.
+This repository contains the current paper-track code for EEG channel-budget experiments.
 
-Scope:
-- Backbones: `nexusnet`, `lggnet`, `mshallowconvnet`
-- Budgets: `topk=3/5/8`
-- Main focus: baseline-vs-selected comparison and unified benchmark runs
-- Protocol: training hyperparameters are selected automatically from each backbone's official defaults unless explicitly overridden
+## Current status
 
-Main entrypoints:
+- The only model with completed parameter tuning is `NexusNet`.
+- `LGGNet` and `M-ShallowConvNet` are still kept in the codebase, but they have not been finalized as part of the current experimental results.
+- The present reproducible result path is therefore centered on `NexusNet + top-k channel selection`.
+
+## Main entrypoints
+
 - `train_iot_baseline.py`: train the full-channel baseline for one backbone
 - `train_iot_framework.py`: train the graph-guided top-k selector for one backbone and one budget
 - `compare_iot_baseline_vs_selected.py`: run full vs `topk=3/5/8` for the three paper backbones
 - `benchmark_iot_framework.py`: run selector-only benchmark for the three paper backbones
 - `experiment_profiles.py`: paper-track hyperparameter profiles for each backbone and budget
 
-Included modules:
+## Included modules
+
 - `models/`: only the components needed by NexusNet, LGGNet, M-ShallowConvNet, and the IoT wrapper
 - `tools/`: dataset loading, training helpers, complexity helpers, and channel export helpers
 
-Notes:
-- Historical exploratory scripts and JSON result files are intentionally excluded.
-- Current defaults target the paper-track setup with the three selected backbones.
+## Notes
+
+- Existing multi-backbone code is retained for later extension, but it is not part of the current finalized result set.
+- When describing finished results in the paper or README, treat `NexusNet` as the only completed tuned model at this stage.
 
 Current released default:
 - Main method: `run_stable_standalone_pipeline.py`
